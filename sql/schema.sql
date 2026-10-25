@@ -64,10 +64,29 @@ create table if not exists jobs (
   created_at timestamptz not null default now()
 );
 
+create table if not exists study_programs (
+  id uuid primary key default gen_random_uuid(),
+  title text not null,
+  school text not null,
+  destination_id uuid references destinations(id) on delete restrict,
+  city text,
+  level text,
+  duration text,
+  intake text,
+  tuition text,
+  summary text,
+  image_url text,
+  closed boolean not null default false,
+  sort int not null default 0,
+  created_at timestamptz not null default now()
+);
+
 create table if not exists applications (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references users(id) on delete cascade,
   job_id uuid references jobs(id) on delete set null,
+  kind text not null default 'job' check (kind in ('job','study')),
+  program_id uuid references study_programs(id) on delete set null,
   destination text,
   profession text,
   stage int not null default 0 check (stage between 0 and 5),
@@ -75,6 +94,7 @@ create table if not exists applications (
   created_at timestamptz not null default now()
 );
 create unique index if not exists applications_user_job on applications(user_id, job_id) where job_id is not null;
+create unique index if not exists applications_user_program on applications(user_id, program_id) where program_id is not null;
 
 create table if not exists documents (
   id uuid primary key default gen_random_uuid(),
@@ -161,6 +181,7 @@ alter table employers enable row level security;
 alter table categories enable row level security;
 alter table destinations enable row level security;
 alter table jobs enable row level security;
+alter table study_programs enable row level security;
 alter table applications enable row level security;
 alter table documents enable row level security;
 alter table messages enable row level security;

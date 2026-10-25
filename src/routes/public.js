@@ -16,12 +16,14 @@ const limit = (max, windowMin = 60) => rateLimit({
 
 // Everything the public website needs, in one request.
 r.get('/site', wrap(async (req, res) => {
-  const [s, cats, dests, items, jobs] = await Promise.all([
+  const [s, cats, dests, items, jobs, progs] = await Promise.all([
     db.from('settings').select('key,value'),
     db.from('categories').select('id,name,color,image_url,sort').order('sort').order('name'),
     db.from('destinations').select('id,name,image_url,route_text,typical_time,sort').order('sort').order('name'),
     db.from('content_items').select('id,section,title,body,value,extra,image_url,sort').eq('active', true).order('sort').order('created_at'),
     db.from('jobs').select('id,title,city,salary,filled,employer:employers(name,verified),destination:destinations(name),category:categories(name)')
+      .order('sort').order('created_at', { ascending: false }),
+    db.from('study_programs').select('id,title,school,city,level,duration,intake,tuition,summary,image_url,closed,destination:destinations(name)')
       .order('sort').order('created_at', { ascending: false }),
   ]);
   const settings = {};
@@ -33,6 +35,7 @@ r.get('/site', wrap(async (req, res) => {
     categories: ok(cats),
     destinations: ok(dests),
     content,
+    programs: ok(progs).map(p => ({ ...p, destination: p.destination && p.destination.name })),
     jobs: ok(jobs).map(j => ({
       id: j.id, title: j.title, city: j.city, salary: j.salary, filled: j.filled,
       employer: j.employer && j.employer.name, verified: !!(j.employer && j.employer.verified),

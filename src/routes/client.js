@@ -13,13 +13,17 @@ r.use(requireAuth, requireRole('client'));
 r.get('/dashboard', wrap(async (req, res) => {
   const uid = req.user.id;
   const [apps, docs, msgs, types] = await Promise.all([
-    db.from('applications').select('id,stage,destination,profession,created_at,job:jobs(id,title,city,salary,employer:employers(name),destination:destinations(name))')
+    db.from('applications').select('id,kind,stage,destination,profession,created_at,job:jobs(id,title,city,salary,employer:employers(name),destination:destinations(name)),program:study_programs(id,title,school,city,level,tuition,destination:destinations(name))')
       .eq('user_id', uid).order('created_at', { ascending: false }),
     db.from('documents').select('id,doc_type,file_name,status,uploaded_at').eq('user_id', uid).order('uploaded_at', { ascending: false }),
     db.from('messages').select('id,sender,body,created_at').eq('user_id', uid).order('created_at'),
-    db.from('content_items').select('title').eq('section', 'doc_types').eq('active', true).order('sort').order('created_at'),
+    db.from('content_items').select('title,extra').eq('section', 'doc_types').eq('active', true).order('sort').order('created_at'),
   ]);
-  res.json({ user: req.user, applications: ok(apps), documents: ok(docs), messages: ok(msgs), docTypes: ok(types).map(t => t.title) });
+  const applications = ok(apps);
+  const isStudent = applications.some(a => a.kind === 'study');
+  // a document type marked "study" is only shown to students
+  const docTypes = ok(types).filter(t => t.extra !== 'study' || isStudent).map(t => t.title);
+  res.json({ user: req.user, applications, documents: ok(docs), messages: ok(msgs), docTypes });
 }));
 
 r.post('/apply', wrap(async (req, res) => {
@@ -38,6 +42,27 @@ r.post('/apply', wrap(async (req, res) => {
   notifyAdmins({ title: 'New job application', body: `${req.user.name} applied for ${job.title}`, link: `admin?s=applicants&open=${req.user.id}`,
     email: { subject: `${req.user.name} applied for ${job.title}`, heading: 'New job application',
       paras: [`${req.user.name} <${req.user.email}> applied for ${job.title}.`],
+      button: { label: 'Open applicant', url: siteUrl(`admin?s=applicants&open=${req.user.id}`) } } });
+  res.status(201).json({ ok: true });
+}));
+
+r.post('/apply-study', wrap(async (req, res) => {
+  const p = ok(await db.from('study_programs').select('id,title,school,closed,destination:destinations(name)').eq('id', req.body.program_id).maybeSingle());
+  if (!p) throw bad('That program does not exist.', 404);
+  if (p.closed) throw bad('Applications for this program are closed.', 409);
+  const { error } = await db.from('applications').insert({
+    user_id: req.user.id, kind: 'study', program_id: p.id, destination: p.destination && p.destination.name, profession: p.title,
+  });
+  if (error && error.code === '23505') throw bad('You already applied for this program.', 409);
+  if (error) ok({ error });
+  const what = `${p.title} at ${p.school}`;
+  notifyUser(req.user.id, { title: 'Study application sent', body: what, link: 'dashboard',
+    email: { subject: `Application received: ${p.title}`, heading: 'We received your study application',
+      paras: [`Your application for ${what} is in. Your advisor will review it and tell you what to prepare next.`],
+      button: { label: 'Open my dashboard', url: siteUrl('dashboard') } } });
+  notifyAdmins({ title: 'New study application', body: `${req.user.name} applied for ${what}`, link: `admin?s=applicants&open=${req.user.id}`,
+    email: { subject: `${req.user.name} applied for ${p.title}`, heading: 'New study application',
+      paras: [`${req.user.name} <${req.user.email}> applied for ${what}.`],
       button: { label: 'Open applicant', url: siteUrl(`admin?s=applicants&open=${req.user.id}`) } } });
   res.status(201).json({ ok: true });
 }));

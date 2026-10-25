@@ -10,9 +10,11 @@ const r = express.Router();
 r.use(requireAuth, requireRole('admin'));
 
 const STAGES = ['Eligibility', 'Profile', 'Interview', 'Offer', 'Visa', 'Relocation'];
+const STUDY_STAGES = ['Eligibility', 'Application', 'Admission', 'Visa', 'Pre-departure', 'Enrolled'];
+const stagesFor = kind => (kind === 'study' ? STUDY_STAGES : STAGES);
 const VISA_STAGES = ['Eligibility', 'Documents', 'Legalise', 'File', 'Follow up', 'Decision'];
 const SECTIONS = ['hero_ticks', 'about_items', 'stats', 'services', 'how_steps', 'placed', 'testimonials', 'news',
-  'visa_steps', 'checklist', 'fees', 'faq', 'values', 'team', 'doc_types'];
+  'visa_steps', 'checklist', 'fees', 'faq', 'values', 'team', 'doc_types', 'study_steps', 'study_faq'];
 
 // Generic list / create / update / delete for one table.
 function crud(table, fields, o = {}) {
@@ -57,6 +59,11 @@ r.use('/jobs', crud('jobs',
   { required: ['title', 'employer_id', 'destination_id', 'category_id'], order: [['sort'], ['created_at', false]],
     select: 'id,title,city,salary,filled,sort,employer_id,destination_id,category_id,employer:employers(name),destination:destinations(name),category:categories(name)' }));
 
+r.use('/study-programs', crud('study_programs',
+  { title: 'text', school: 'text', destination_id: 'text', city: 'text', level: 'text', duration: 'text', intake: 'text', tuition: 'text', summary: 'text', image_url: 'text', closed: 'bool', sort: 'int' },
+  { required: ['title', 'school', 'destination_id'], order: [['sort'], ['created_at', false]],
+    select: 'id,title,school,city,level,duration,intake,tuition,summary,image_url,closed,sort,destination_id,destination:destinations(name)' }));
+
 r.use('/employers', crud('employers',
   { name: 'text', country: 'text', contact_email: 'text', phone: 'text', verified: 'bool', notes: 'text' },
   { required: ['name'], order: [['name']] }));
@@ -99,7 +106,7 @@ r.get('/clients', wrap(async (req, res) => {
   res.json(ok(await db.from('users').select('id,name,email').eq('role', 'client').order('name')));
 }));
 
-const APP_SEL = 'id,stage,destination,profession,placed_at,created_at,user:users(id,name,email,phone,active),job:jobs(title,city,employer:employers(name))';
+const APP_SEL = 'id,kind,stage,destination,profession,placed_at,created_at,user:users(id,name,email,phone,active),job:jobs(title,city,employer:employers(name)),program:study_programs(title,school,city)';
 
 r.get('/applications', wrap(async (req, res) => {
   const limit = Math.min(Number.parseInt(req.query.limit, 10) || 1000, 1000);
@@ -109,15 +116,16 @@ r.get('/applications', wrap(async (req, res) => {
 r.patch('/applications/:id', wrap(async (req, res) => {
   const stage = Number.parseInt(req.body.stage, 10);
   if (!(stage >= 0 && stage <= 5)) throw bad('Invalid stage.');
-  const prev = ok(await db.from('applications').select('stage,user_id,placed_at,profession').eq('id', req.params.id).single());
+  const prev = ok(await db.from('applications').select('kind,stage,user_id,placed_at,profession').eq('id', req.params.id).single());
   const next = ok(await db.from('applications')
     .update({ stage, placed_at: stage === 5 ? (prev.placed_at || new Date().toISOString()) : null })
     .eq('id', req.params.id).select(APP_SEL).single());
   if (prev.stage !== stage) {
-    const what = (next.job && next.job.title) || next.profession || 'your application';
-    notifyUser(prev.user_id, { title: `Moved to ${STAGES[stage]}`, body: what, link: 'dashboard',
-      email: { subject: `Your application moved to "${STAGES[stage]}"`, heading: 'Progress update',
-        paras: [`Good news: ${what} is now at the "${STAGES[stage]}" step.`],
+    const what = (next.job && next.job.title) || (next.program && next.program.title) || next.profession || 'your application';
+    const names = stagesFor(prev.kind);
+    notifyUser(prev.user_id, { title: `Moved to ${names[stage]}`, body: what, link: 'dashboard',
+      email: { subject: `Your application moved to "${names[stage]}"`, heading: 'Progress update',
+        paras: [`Good news: ${what} is now at the "${names[stage]}" step.`],
         button: { label: 'Open my dashboard', url: siteUrl('dashboard') } } });
   }
   res.json(next);
@@ -234,11 +242,12 @@ r.post('/mail/test', wrap(async (req, res) => {
 r.get('/stats', wrap(async (req, res) => {
   const [users, apps, jobs, visa] = await Promise.all([
     db.from('users').select('created_at').eq('role', 'client'),
-    db.from('applications').select('stage,placed_at,destination'),
+    db.from('applications').select('kind,stage,placed_at,destination'),
     db.from('jobs').select('id').eq('filled', false),
     db.from('visa_cases').select('id').lt('stage', 5),
   ]);
-  const U = ok(users), A = ok(apps);
+  const U = ok(users), ALL = ok(apps);
+  const A = ALL.filter(a => a.kind !== 'study'), S = ALL.filter(a => a.kind === 'study'); // jobs and study are counted separately
   const now = new Date(), months = [];
   for (let i = 5; i >= 0; i--) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
@@ -254,11 +263,13 @@ r.get('/stats', wrap(async (req, res) => {
   const byDest = {};
   A.filter(a => a.placed_at).forEach(a => { const k = a.destination || 'Other'; byDest[k] = (byDest[k] || 0) + 1; });
   res.json({
-    kpi: { registered: U.length, activeJobs: ok(jobs).length, placements: A.filter(a => a.placed_at).length, visaOpen: ok(visa).length },
+    kpi: { registered: U.length, activeJobs: ok(jobs).length, placements: A.filter(a => a.placed_at).length, enrolled: S.filter(a => a.placed_at).length, visaOpen: ok(visa).length },
     months: months.map(({ label, registered, placed }) => ({ label, registered, placed })),
     placedByDestination: Object.entries(byDest).map(([name, count]) => ({ name, count })),
     pipeline: STAGES.map((name, i) => ({ name, count: A.filter(a => a.stage >= i).length })),
+    studyPipeline: STUDY_STAGES.map((name, i) => ({ name, count: S.filter(a => a.stage >= i).length })),
     totalApplications: A.length,
+    totalStudy: S.length,
   });
 }));
 
@@ -269,8 +280,9 @@ r.get('/export/:what', wrap(async (req, res) => {
     case 'applications':
       rows = ok(await db.from('applications').select(APP_SEL).order('created_at', { ascending: false }));
       cols = [[x => x.user && x.user.name, 'Name'], [x => x.user && x.user.email, 'Email'], [x => x.user && x.user.phone, 'Phone'],
-        [x => x.profession, 'Profession'], [x => x.destination, 'Destination'], [x => x.job && x.job.title, 'Job'],
-        [x => STAGES[x.stage], 'Stage'], [x => d(x.created_at), 'Applied']];
+        [x => x.profession, 'Profession'], [x => x.destination, 'Destination'], [x => x.kind === 'study' ? 'Study' : 'Job', 'Type'],
+        [x => (x.kind === 'study' ? x.program && x.program.title : x.job && x.job.title), 'Job or program'],
+        [x => stagesFor(x.kind)[x.stage], 'Stage'], [x => d(x.created_at), 'Applied']];
       break;
     case 'contacts':
       rows = ok(await db.from('contact_messages').select('*').order('created_at', { ascending: false }));
