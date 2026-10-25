@@ -40,5 +40,7 @@ app.use((err, req, res, next) => {
   res.status(status).json({ error: status >= 500 ? 'Something went wrong on our side.' : err.message });
 });
 
+const mail = require('./mail');
+console.log(mail.configured() ? `Email: Brevo ready, sending as ${process.env.BREVO_SENDER_EMAIL}` : 'Email: NOT configured (set BREVO_API_KEY and BREVO_SENDER_EMAIL). Emails will be skipped.');
 const port = process.env.PORT || 4000;
-app.listen(port, () => console.log(`Bridgeway API listening on ${port}`));
+app.listen(port, () => console.log(`GoPath Legal API listening on ${port}`));

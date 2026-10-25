@@ -1,10 +1,10 @@
 const express = require('express');
 const multer = require('multer');
 const db = require('../db');
-const { wrap, ok, bad, clean, toCsv, safeName } = require('../util');
+const { wrap, ok, bad, clean, toCsv, safeName, isEmail } = require('../util');
 const { requireAuth, requireRole } = require('../auth');
 const { checkImage } = require('../files');
-const { notifyUser, siteUrl } = require('../mail');
+const { notifyUser, siteUrl, deliver, brevoCheck } = require('../mail');
 
 const r = express.Router();
 r.use(requireAuth, requireRole('admin'));
@@ -217,6 +217,17 @@ r.post('/upload', imgUpload.single('file'), wrap(async (req, res) => {
   const up = await db.storage.from('site-media').upload(path, req.file.buffer, { contentType: req.file.mimetype });
   if (up.error) { console.error('[storage]', up.error); throw bad('Upload failed.', 500); }
   res.status(201).json({ url: db.storage.from('site-media').getPublicUrl(path).data.publicUrl });
+}));
+
+// ---- email health check and test ----
+r.get('/mail/check', wrap(async (req, res) => { res.json(await brevoCheck()); }));
+
+r.post('/mail/test', wrap(async (req, res) => {
+  const to = String(req.body.to || req.user.email).trim().toLowerCase();
+  if (!isEmail(to)) throw bad('Enter a valid email address.');
+  const out = await deliver({ to, subject: 'Test email', heading: 'Your email is working',
+    paras: ['This is a test from your admin dashboard. If you can read this, Brevo is sending your emails correctly.'] });
+  res.json(out);
 }));
 
 // ---- dashboard numbers and exports ----

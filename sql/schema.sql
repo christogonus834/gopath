@@ -1,4 +1,4 @@
--- Bridgeway Careers: run this once in Supabase > SQL Editor.
+-- GoPath Legal: run this once in Supabase > SQL Editor.
 create extension if not exists pgcrypto;
 
 create table if not exists users (
